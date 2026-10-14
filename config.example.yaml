@@ -1,0 +1,69 @@
+# encore — Mac Studio (orchestrator, "brain") + DGX Spark (GPU, "camera")
+# Copy to config.yaml and replace spark.local with your Spark's hostname/IP.
+# Nothing here talks to the internet: every URL is a machine on your LAN.
+
+projects_dir: projects
+
+# ---- runs on the Mac Studio (MLX / Apple silicon) --------------------------
+llm:                          # script writing
+  backend: openai             # any OpenAI-compatible local server
+  base_url: http://localhost:11434/v1     # Ollama   (or mlx_lm.server: http://localhost:8080/v1)
+  model: qwen3:32b            # 512 GB Studio: qwen3:235b-a22b; 128 GB: qwen3:32b / gpt-oss:120b
+  temperature: 0.8
+vlm:                          # clip + character description
+  backend: openai
+  base_url: http://localhost:11434/v1
+  model: qwen2.5vl:72b        # or qwen2.5vl:7b / a Qwen3-VL build
+asr:
+  backend: mlx-whisper        # faster-whisper on CUDA machines
+  model: large-v3-turbo
+separation:
+  backend: demucs             # isolate vocals from concert music (needs the `analysis` extra)
+diarization:
+  backend: auto               # pyannote if installed (+ HF_TOKEN for the one-time weight download)
+faces:
+  backend: insightface        # opencv = lighter fallback
+
+# ---- runs on the DGX Spark (CUDA) ------------------------------------------
+tts:
+  backend: worker             # say = macOS built-in voices (no cloning), silent = testing
+  url: http://spark.local:8100
+  engine: chatterbox          # names come from worker.yaml on the Spark (chatterbox | f5 | cosyvoice)
+image:
+  backend: comfyui            # still = no-GPU compositor
+  url: http://spark.local:8188
+  workflow: workflows/keyframe_flux_kontext.json
+  width: 1280
+  height: 720
+  steps: 24
+  identity_threshold: 0.35    # ArcFace cosine; retries below this
+  max_attempts: 3
+video:
+  talking_backend: worker     # InfiniteTalk/MultiTalk (best lip sync, multi-person, long takes)
+  broll_backend: comfyui      # Wan 2.2 via ComfyUI
+  worker_url: http://spark.local:8100
+  comfy_url: http://spark.local:8188
+  talking_engine: infinitetalk
+  broll_engine: wan_i2v
+  workflows:
+    broll: workflows/i2v_wan22_ti2v5b.json
+    extend: workflows/i2v_wan22_ti2v5b.json
+    talking: workflows/s2v_wan22.json     # used only if talking_backend: comfyui
+  width: 1280
+  height: 704
+  fps: 24
+  max_clip_seconds: 5.0
+
+# ---- final edit (Mac, ffmpeg) -----------------------------------------------
+edit:
+  width: 1280
+  height: 720
+  fps: 25
+  color_match: true           # grade generated shots toward the source's colour stats
+  grain: 4
+  watermark: true             # keep synthetic media labelled
+  watermark_text: AI-GENERATED
+  prepend_source: true        # output = original clip + new footage
+  music_bed: false            # true = duck the source's instrumental stem under the dialogue
+  subtitles: sidecar          # none | sidecar (.srt) | burn
+  crossfade: 0.0

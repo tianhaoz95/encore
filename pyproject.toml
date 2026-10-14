@@ -1,0 +1,43 @@
+[project]
+name = "encore"
+version = "0.1.0"
+description = "Extend a movie clip into new scenes (interviews, podcasts, ...) with fully on-device AI models."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.6",
+    "httpx>=0.27",
+    "typer>=0.12",
+    "pyyaml>=6.0",
+    "numpy>=1.26",
+    "pillow>=10.0",
+    "opencv-python-headless>=4.9",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "python-multipart>=0.0.9",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+# Mac Studio: Apple-silicon native ASR
+mac = ["mlx-whisper>=0.4"]
+# CUDA box (DGX Spark): ASR via CTranslate2
+cuda = ["faster-whisper>=1.0"]
+# Better analysis (both machines)
+analysis = ["insightface>=0.7.3", "onnxruntime>=1.17", "demucs>=4.0", "scenedetect>=0.6"]
+diarization = ["pyannote.audio>=3.1"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+encore = "encore.cli:app"
+encore-worker = "encore.workers.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["encore"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

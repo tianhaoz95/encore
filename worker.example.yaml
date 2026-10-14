@@ -1,0 +1,54 @@
+# encore GPU worker (DGX Spark).  encore-worker --config worker.yaml --port 8100
+# Engines load lazily; GPU engines are swapped so only one big model is resident.
+work_dir: ~/.cache/encore/worker
+keep_jobs: 200
+
+engines:
+  # ---------------- TTS (voice cloning) ----------------
+  chatterbox:                     # pip install chatterbox-tts  (multilingual: ko, en, ja, zh, ...)
+    type: chatterbox
+    multilingual: true
+    voices_dir: ~/encore-voices # optional stock .wav voices for speakers not in the clip (e.g. a host)
+  f5:                             # pip install f5-tts
+    type: f5
+    model: F5TTS_v1_Base
+  cosyvoice:                      # FunAudioLLM/CosyVoice via your own small wrapper script
+    type: command
+    task: tts
+    cwd: /opt/CosyVoice
+    python: /opt/CosyVoice/.venv/bin/python
+    cmd: ["{python}", "tools/encore_tts.py", "--text-file", "{text_file}", "--ref", "{ref_audio}",
+          "--ref-text", "{ref_text}", "--out", "{out}"]
+    output_ext: .wav
+
+  # ---------------- talking heads (lip sync) ----------------
+  infinitetalk:                   # git clone https://github.com/MeiGen-AI/InfiniteTalk
+    type: infinitetalk
+    repo: /opt/InfiniteTalk
+    python: /opt/InfiniteTalk/.venv/bin/python
+    ckpt_dir: weights/Wan2.1-I2V-14B-480P
+    wav2vec_dir: weights/chinese-wav2vec2-base
+    single_weights: weights/InfiniteTalk/single/infinitetalk.safetensors
+    multi_weights: weights/InfiniteTalk/multi/infinitetalk.safetensors
+    size: infinitetalk-720        # infinitetalk-480 is ~2x faster
+    sample_steps: 40
+    motion_frame: 9
+    extra_args: []                # e.g. ["--use_teacache"] for speed
+
+  # ---------------- image-to-video ----------------
+  wan_i2v:                        # git clone https://github.com/Wan-Video/Wan2.2
+    type: command
+    task: i2v
+    cwd: /opt/Wan2.2
+    python: /opt/Wan2.2/.venv/bin/python
+    cmd: ["{python}", "generate.py", "--task", "ti2v-5B", "--size", "1280*704", "--ckpt_dir", "./Wan2.2-TI2V-5B",
+          "--image", "{image}", "--prompt", "{prompt}", "--frame_num", "{frames}", "--save_file", "{out}"]
+    output_ext: .mp4
+
+  # ---------------- no-GPU test engines ----------------
+  kenburns:
+    type: kenburns
+    task: i2v
+  kenburns_talking:
+    type: kenburns
+    task: talking

@@ -1,0 +1,690 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Encore Walkthrough</title>
+<meta name="description" content="Design, implementation and testing guide for Encore: extend a movie clip into new scenes with fully on-device AI.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%235b4ee6'/%3E%3Cpath d='M12 9l12 7-12 7z' fill='white'/%3E%3C/svg%3E">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="wrap">
+    <a class="brand" href="#top">
+      <svg class="logo" viewBox="0 0 32 32"><defs><linearGradient id="lg" x1="0" x2="1"><stop offset="0" stop-color="#5b4ee6"/><stop offset="1" stop-color="#e5487a"/></linearGradient></defs><rect width="32" height="32" rx="8" fill="url(#lg)"/><path d="M12 9l12 7-12 7z" fill="#fff"/></svg>
+      Encore
+    </a>
+    <div class="navlinks">
+      <a href="#idea">Idea</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#pipeline">Pipeline</a>
+      <a href="#data">Data model</a>
+      <a href="#deep">Deep dives</a>
+      <a href="#loop">Review loop</a>
+      <a href="#protocols">Protocols</a>
+      <a href="#testing">Testing</a>
+      <a href="#reference">Reference</a>
+    </div>
+    <button class="theme-btn" id="themeBtn" title="Toggle theme">◐</button>
+  </div>
+</nav>
+
+<!-- ================================================================ HERO -->
+<header class="hero" id="top">
+  <div class="wrap">
+    <div class="eyebrow">Project walkthrough</div>
+    <h1>Your clip ends.<br><span class="grad">Encore keeps going.</span></h1>
+    <p class="lead">Give Encore a movie clip and one sentence, such as <em>“a K-pop concert → a backstage podcast with the members”</em>. It writes, casts, voices, shoots and edits the follow-up scene. Every model runs on a <b>Mac Studio</b> and a <b>DGX Spark</b> on your desk, with no cloud APIs.</p>
+    <div class="hero-stats">
+      <div><b>7</b>resumable stages</div>
+      <div><b>2</b>machines, one LAN</div>
+      <div><b>0</b>cloud calls</div>
+      <div><b>2</b>human checkpoints</div>
+    </div>
+  </div>
+  <div class="wrap">
+    <div class="filmstrip" aria-hidden="true">
+      <div class="holes top"></div><div class="holes bot"></div>
+      <div class="track" id="filmTrack"></div>
+      <div class="seam"></div>
+    </div>
+  </div>
+</header>
+
+<!-- ================================================================ IDEA -->
+<section id="idea">
+  <div class="wrap">
+    <div class="eyebrow">01 · The idea</div>
+    <h2>Not one model. A film crew.</h2>
+    <p class="lead">No open video model can watch a clip and keep going for minutes in a new scenario. So Encore splits the job the way a production does. Each department is a different local model, and the code coordinates them.</p>
+    <div class="grid-3 reveal" style="margin-top:26px">
+      <div class="card"><div class="pill">Research</div><h3>Understand</h3><p>Find the cuts, separate vocals from the music, transcribe speech, and group faces into people. A vision model describes the clip's look.</p></div>
+      <div class="card"><div class="pill">Writers' room</div><h3>Write</h3><p>A local LLM turns the cast list and your request into a strict JSON shot list. Each shot has a type, framing, setting, prompt and dialogue.</p></div>
+      <div class="card"><div class="pill">Casting</div><h3>Cast</h3><p>Each person gets face references, an appearance description and a voice sample cut from the clip. Those become identity and voice conditioning.</p></div>
+      <div class="card"><div class="pill">Camera</div><h3>Shoot</h3><p>Keyframes come first, because stills are cheap to fix. Talking shots then get audio-driven lip sync; b-roll and continuations get image-to-video.</p></div>
+      <div class="card"><div class="pill">Post</div><h3>Edit</h3><p>Every shot is conformed and color-matched to the source with a 3D LUT. Then come film grain, loudness normalization, subtitles and a watermark.</p></div>
+      <div class="card"><div class="pill">Director (you)</div><h3>Review</h3><p>Every artifact is a file. Rename people, fix lines, or regenerate a single keyframe or shot without redoing anything else.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================== ARCHITECTURE -->
+<section id="architecture">
+  <div class="wrap">
+    <div class="eyebrow">02 · Architecture</div>
+    <h2>A brain and a camera on one LAN</h2>
+    <p class="lead">The Mac Studio is the <b>brain</b>. Its large unified memory and MLX make it ideal for big LLMs, the vision model, Whisper and the UI. The DGX Spark is the <b>camera</b>. Nearly every video, lip-sync and voice-cloning repo assumes CUDA, so all diffusion work runs there. The animated lines show where requests go.</p>
+    <div class="card arch reveal" style="margin-top:22px">
+      <svg viewBox="0 0 1000 560" role="img" aria-label="Architecture diagram">
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="currentColor"/></marker>
+        </defs>
+        <!-- zones -->
+        <rect class="mac-zone" x="14" y="70" width="520" height="476" rx="18"/>
+        <rect class="spark-zone" x="590" y="70" width="396" height="476" rx="18"/>
+        <text x="34" y="102" font-weight="700" font-size="17" style="fill:var(--mac)">Mac Studio · brain</text>
+        <text x="34" y="122" font-size="12" class="t-muted">Apple silicon · MLX · up to 512 GB unified memory</text>
+        <text x="610" y="102" font-weight="700" font-size="17" style="fill:var(--spark)">DGX Spark · camera</text>
+        <text x="610" y="122" font-size="12" class="t-muted">GB10 · CUDA · 128 GB unified memory</text>
+
+        <!-- you -->
+        <rect class="box" x="200" y="8" width="170" height="44" rx="10"/>
+        <text x="285" y="35" text-anchor="middle" font-weight="600" font-size="14">🧑‍🎬 You (browser / CLI)</text>
+        <path class="flow acc" d="M285 52 V150"/>
+
+        <!-- mac boxes -->
+        <rect class="box" x="190" y="150" width="190" height="62" rx="10"/>
+        <text x="285" y="176" text-anchor="middle" font-weight="700" font-size="14">encore serve</text>
+        <text x="285" y="196" text-anchor="middle" font-size="12" class="t-muted">FastAPI UI · job queue · :8700</text>
+
+        <rect class="box" x="190" y="250" width="190" height="62" rx="10"/>
+        <text x="285" y="276" text-anchor="middle" font-weight="700" font-size="14">pipeline.py</text>
+        <text x="285" y="296" text-anchor="middle" font-size="12" class="t-muted">7 stages · project store</text>
+        <path class="flow acc" d="M285 212 V250"/>
+
+        <rect class="box" x="34" y="360" width="150" height="76" rx="10"/>
+        <text x="109" y="386" text-anchor="middle" font-weight="700" font-size="13">Ollama / mlx_lm</text>
+        <text x="109" y="404" text-anchor="middle" font-size="11.5" class="t-muted">LLM: Qwen3 32B/235B</text>
+        <text x="109" y="420" text-anchor="middle" font-size="11.5" class="t-muted">VLM: Qwen2.5-VL</text>
+
+        <rect class="box" x="210" y="360" width="150" height="76" rx="10"/>
+        <text x="285" y="386" text-anchor="middle" font-weight="700" font-size="13">Analysis</text>
+        <text x="285" y="404" text-anchor="middle" font-size="11.5" class="t-muted">mlx-whisper · Demucs</text>
+        <text x="285" y="420" text-anchor="middle" font-size="11.5" class="t-muted">InsightFace · pyannote</text>
+
+        <rect class="box" x="384" y="360" width="134" height="76" rx="10"/>
+        <text x="451" y="386" text-anchor="middle" font-weight="700" font-size="13">Edit</text>
+        <text x="451" y="404" text-anchor="middle" font-size="11.5" class="t-muted">ffmpeg · LUTs</text>
+        <text x="451" y="420" text-anchor="middle" font-size="11.5" class="t-muted">mix · subtitles</text>
+
+        <rect class="box" x="120" y="470" width="330" height="56" rx="10"/>
+        <text x="285" y="494" text-anchor="middle" font-weight="700" font-size="13">projects/&lt;name&gt;/</text>
+        <text x="285" y="512" text-anchor="middle" font-size="11.5" class="t-muted">analysis · bible.json · script.json · audio · keyframes · shots · output</text>
+
+        <path class="flow mac" d="M230 312 C 160 330, 120 340, 109 360"/>
+        <path class="flow mac" d="M285 312 V360"/>
+        <path class="flow mac" d="M340 312 C 410 330, 440 340, 451 360"/>
+        <path class="wire" d="M285 436 V470"/>
+
+        <!-- spark boxes -->
+        <rect class="box" x="626" y="170" width="324" height="140" rx="10"/>
+        <text x="646" y="198" font-weight="700" font-size="14">ComfyUI :8188</text>
+        <text x="646" y="222" font-size="12.5" class="t-muted">▸ Keyframes: FLUX.1 Kontext dev</text>
+        <text x="646" y="244" font-size="12.5" class="t-muted">▸ B-roll / extend: Wan 2.2 TI2V-5B</text>
+        <text x="646" y="266" font-size="12.5" class="t-muted">▸ Optional talking: Wan 2.2 S2V</text>
+        <text x="646" y="292" font-size="11.5" class="t-muted">API-format workflow JSON + {{placeholders}}</text>
+
+        <rect class="box" x="626" y="340" width="324" height="166" rx="10"/>
+        <text x="646" y="368" font-weight="700" font-size="14">encore-worker :8100</text>
+        <text x="646" y="392" font-size="12.5" class="t-muted">▸ TTS: Chatterbox Multilingual · F5-TTS</text>
+        <text x="646" y="414" font-size="12.5" class="t-muted">▸ Talking: InfiniteTalk / MultiTalk</text>
+        <text x="646" y="436" font-size="12.5" class="t-muted">▸ i2v: Wan2.2 reference repo</text>
+        <text x="646" y="458" font-size="12.5" class="t-muted">▸ command: wrap any CLI</text>
+        <text x="646" y="488" font-size="11.5" class="t-muted">one job at a time · swaps GPU models</text>
+
+        <!-- LAN -->
+        <path class="flow spark" d="M380 270 C 500 270, 520 240, 626 240"/>
+        <path class="flow spark" d="M380 290 C 500 290, 520 420, 626 420"/>
+        <rect x="508" y="318" width="64" height="24" rx="12" style="fill:var(--panel);stroke:var(--line)"/>
+        <text x="540" y="334" text-anchor="middle" font-size="11" font-weight="700" class="t-muted">LAN</text>
+      </svg>
+      <div class="legend">
+        <span><i style="background:var(--accent)"></i>your requests</span>
+        <span><i style="background:var(--mac)"></i>local calls on the Mac</span>
+        <span><i style="background:var(--spark)"></i>HTTP to the Spark (ComfyUI / worker)</span>
+      </div>
+    </div>
+    <div class="grid-2 reveal" style="margin-top:18px">
+      <div class="card">
+        <h4>Why not run everything on one machine?</h4>
+        <p>The Mac is excellent for large models: MLX streams tokens fast thanks to ~800 GB/s of memory bandwidth. But PyTorch on Apple's GPU backend (MPS) is slow for video diffusion, and many custom CUDA kernels simply don't run on it. The Spark is the reverse: CUDA, FP8/FP4 and every repo works, but its 273 GB/s bandwidth makes huge LLMs slower.</p>
+      </div>
+      <div class="card">
+        <h4>Every stage is movable</h4>
+        <p>Each backend is just a URL in <code>config.yaml</code>. Run TTS on the Mac, move the LLM to the Spark with vLLM, or use only one box. For a no-GPU dry run, swap everything for fallbacks with <code>-s key=value</code> overrides or <code>configs/dryrun.yaml</code>.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ PIPELINE -->
+<section id="pipeline">
+  <div class="wrap">
+    <div class="eyebrow">03 · Pipeline</div>
+    <h2>Seven stages, each one resumable</h2>
+    <p class="lead">Click a stage, or press play to walk through a run. Each stage reads the previous stage's files and writes its own, and <code>project.json</code> records its status. If a run fails at the shoot stage, it resumes there.</p>
+    <div class="card pipeline reveal" style="margin-top:22px">
+      <div class="stages" id="stages"></div>
+      <div class="rail"><div class="fill" id="railFill"></div></div>
+      <div class="stage-detail" id="stageDetail"></div>
+      <div class="controls">
+        <button class="btn primary" id="playBtn">▶ Play run</button>
+        <button class="btn" id="prevBtn">←</button>
+        <button class="btn" id="nextBtn">→</button>
+        <span class="muted" style="font-size:13px" id="stageHint"></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========================================================== DATA MODEL -->
+<section id="data">
+  <div class="wrap">
+    <div class="eyebrow">04 · Data model</div>
+    <h2>Everything is a file you can open</h2>
+    <p class="lead">Stages communicate only through Pydantic models saved as JSON (<code>encore/core/schemas.py</code>). The two you'll touch are the <b>Story Bible</b> (who is in the clip) and the <b>Shot List</b> (what to film).</p>
+
+    <div class="card reveal" style="margin-top:22px">
+      <h3 style="margin-top:0">An example shot list on a timeline</h3>
+      <p class="muted" style="margin-top:0">Block widths are proportional to duration. Press play to scrub through the final cut: the source clip comes first, then the generated shots, with dialogue and subtitles underneath.</p>
+      <div class="timeline" id="scriptTimeline"></div>
+      <div class="controls"><button class="btn primary" id="tlPlay">▶ Play cut</button><span class="muted" id="tlNow" style="font-size:13px"></span></div>
+    </div>
+
+    <div class="grid-2 reveal" style="margin-top:18px">
+      <div>
+        <div class="term-title">bible.json (excerpt)</div>
+<pre><code>{
+  <span class="k">"summary"</span>: <span class="s">"A K-pop group closes a stadium concert..."</span>,
+  <span class="k">"visual_style"</span>: <span class="s">"magenta stage lights, haze, handheld"</span>,
+  <span class="k">"language"</span>: <span class="s">"ko"</span>,
+  <span class="k">"characters"</span>: [{
+    <span class="k">"id"</span>: <span class="s">"char_0"</span>,  <span class="c">// stable id used by the script</span>
+    <span class="k">"name"</span>: <span class="s">"Person 1"</span>, <span class="c">// you rename it</span>
+    <span class="k">"description"</span>: <span class="s">"long silver hair, white jacket"</span>,
+    <span class="k">"face_refs"</span>: [<span class="s">"cast/char_0/ref_0.jpg"</span>, <span class="s">"…"</span>],
+    <span class="k">"voice_ref"</span>: <span class="s">"cast/char_0/voice_ref.wav"</span>,
+    <span class="k">"voice_ref_text"</span>: <span class="s">"감사합니다 여러분…"</span>,
+    <span class="k">"lora"</span>: <span class="n">null</span>, <span class="k">"enabled"</span>: <span class="n">true</span>
+  }]
+}</code></pre>
+      </div>
+      <div>
+        <div class="term-title">script.json (excerpt)</div>
+<pre><code>{
+  <span class="k">"title"</span>: <span class="s">"After the Encore"</span>, <span class="k">"format"</span>: <span class="s">"podcast"</span>,
+  <span class="k">"extra_voices"</span>: { <span class="k">"host"</span>: <span class="s">"warm radio host"</span> },
+  <span class="k">"shots"</span>: [{
+    <span class="k">"id"</span>: <span class="s">"s02"</span>,
+    <span class="k">"kind"</span>: <span class="s">"talking"</span>,       <span class="c">// talking | broll | extend</span>
+    <span class="k">"framing"</span>: <span class="s">"closeup"</span>,     <span class="c">// wide | medium | closeup | two_shot</span>
+    <span class="k">"setting"</span>: <span class="s">"podcast studio"</span>, <span class="c">// same string = same master frame</span>
+    <span class="k">"characters"</span>: [<span class="s">"char_0"</span>],
+    <span class="k">"visual"</span>: <span class="s">"Close-up of a woman with long silver hair…"</span>,
+    <span class="k">"lines"</span>: [
+      {<span class="k">"speaker"</span>: <span class="s">"host"</span>,   <span class="k">"text"</span>: <span class="s">"How did tonight feel?"</span>},
+      {<span class="k">"speaker"</span>: <span class="s">"char_0"</span>, <span class="k">"text"</span>: <span class="s">"Honestly? I cried."</span>,
+       <span class="k">"emotion"</span>: <span class="s">"emotional"</span>}
+    ],
+    <span class="k">"duration"</span>: <span class="n">6.4</span>  <span class="c">// rewritten to match the audio</span>
+  }]
+}</code></pre>
+      </div>
+    </div>
+    <div class="callout reveal"><b>LLM output is never trusted as-is.</b> <code>scriptwriter.normalize()</code> repairs common slips: names used instead of ids, speakers missing from <code>characters</code>, duplicate ids, an <code>extend</code> shot that isn't first, and talking shots with no lines. The client first requests a <code>json_schema</code> response, falls back to <code>json_object</code> and then plain text, and feeds validation errors back to the model for up to two retries.</div>
+  </div>
+</section>
+
+<!-- ========================================================== DEEP DIVES -->
+<section id="deep">
+  <div class="wrap">
+    <div class="eyebrow">05 · Deep dives</div>
+    <h2>The six hard problems and how each is handled</h2>
+
+    <!-- faces -->
+    <div class="grid-2 reveal" style="margin-top:26px;align-items:center">
+      <div>
+        <h3>① Who is in the clip? Face clustering</h3>
+        <p>Frames are sampled at 2 fps. Every face is detected and turned into a 512-d identity embedding (ArcFace via InsightFace, or OpenCV's YuNet + SFace as a fallback). <b>Average-linkage agglomerative clustering</b> on cosine distance then merges the closest groups until no pair is closer than <code>faces.cluster_threshold</code> (0.45). Groups smaller than 3 faces count as noise, such as crowd members.</p>
+        <p>For each person, the 6 best crops (scored on detection confidence, size and sharpness, and spread across time) become the face references. The average embedding is saved for identity checks later.</p>
+        <p class="muted" style="font-size:14px">Code: <code>encore/analyze/faces.py → cluster_embeddings()</code>, <code>stages/bible.py → _pick_refs()</code></p>
+      </div>
+      <div class="card">
+        <canvas id="clusterCanvas" width="520" height="340"></canvas>
+        <div class="controls"><button class="btn" id="clusterReplay">↻ Replay clustering</button><span class="muted" style="font-size:13px" id="clusterInfo"></span></div>
+      </div>
+    </div>
+
+    <!-- voices -->
+    <div class="reveal" style="margin-top:40px">
+      <h3>② What do they sound like? Voices and per-speaker tracks</h3>
+      <div class="grid-2">
+        <div>
+          <p><b>Voice references.</b> Concert audio is mostly music, so Demucs separates the vocals first. Each transcript segment is assigned to a character. With diarization, speaker labels map to characters by how often that face is on screen while the speaker talks. Without it, each segment goes to the largest face on screen. Up to 12 s of a character's longest segments become <code>voice_ref.wav</code>.</p>
+          <p><b>Dialogue.</b> Each line is synthesized separately and cached by a hash of its text, voice and emotion, so editing one line re-renders only that line. Lines are laid out with a 0.3 s lead-in and 0.35 s gaps. One extra track per on-screen character carries their lines and is silent elsewhere. Multi-person lip-sync models (MultiTalk/InfiniteTalk, <code>audio_type: "para"</code>) need exactly this to drive the right mouth.</p>
+        </div>
+        <div class="card">
+          <div id="voiceTracks"></div>
+          <div class="controls"><button class="btn primary" id="voicePlay">▶ Animate</button></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- keyframes -->
+    <div class="reveal" style="margin-top:40px">
+      <h3>③ Keeping faces consistent: master frames and identity QC</h3>
+      <div class="grid-2" style="align-items:start">
+        <div class="card">
+          <svg viewBox="0 0 520 300" style="width:100%" id="masterTree">
+            <defs><marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" style="fill:var(--muted)"/></marker></defs>
+            <g font-family="var(--sans)" font-size="12">
+              <rect x="10" y="20" width="110" height="60" rx="8" style="fill:var(--bg-2);stroke:var(--line)"/>
+              <text x="65" y="45" text-anchor="middle" style="fill:var(--ink)" font-weight="600">face refs</text>
+              <text x="65" y="63" text-anchor="middle" style="fill:var(--muted)">char_0 · char_1</text>
+              <rect x="190" y="110" width="140" height="80" rx="10" style="fill:var(--accent-soft);stroke:var(--accent)"/>
+              <text x="260" y="140" text-anchor="middle" style="fill:var(--ink)" font-weight="700">MASTER</text>
+              <text x="260" y="158" text-anchor="middle" style="fill:var(--muted)">"podcast studio"</text>
+              <text x="260" y="174" text-anchor="middle" style="fill:var(--muted)">wide · everyone</text>
+              <rect x="10" y="220" width="110" height="60" rx="8" style="fill:var(--bg-2);stroke:var(--line)"/>
+              <text x="65" y="245" text-anchor="middle" style="fill:var(--ink)" font-weight="600">source frame</text>
+              <text x="65" y="263" text-anchor="middle" style="fill:var(--muted)">style backdrop</text>
+              <path d="M120 50 C 160 60, 170 110, 190 130" style="stroke:var(--muted);fill:none" marker-end="url(#ah2)" class="draw"/>
+              <path d="M120 250 C 160 240, 170 190, 190 170" style="stroke:var(--muted);fill:none;stroke-dasharray:4 4" marker-end="url(#ah2)"/>
+              <g class="kf" style="--d:0s"><rect x="390" y="10" width="120" height="56" rx="8" style="fill:var(--panel);stroke:var(--talking)"/><text x="450" y="34" text-anchor="middle" style="fill:var(--ink)" font-weight="600">s01 wide</text><text x="450" y="52" text-anchor="middle" style="fill:var(--muted)">= master copy</text></g>
+              <g class="kf"><rect x="390" y="80" width="120" height="56" rx="8" style="fill:var(--panel);stroke:var(--talking)"/><text x="450" y="104" text-anchor="middle" style="fill:var(--ink)" font-weight="600">s02 closeup</text><text x="450" y="122" text-anchor="middle" style="fill:var(--muted)">edit(master+ref0)</text></g>
+              <g class="kf"><rect x="390" y="150" width="120" height="56" rx="8" style="fill:var(--panel);stroke:var(--talking)"/><text x="450" y="174" text-anchor="middle" style="fill:var(--ink)" font-weight="600">s03 medium</text><text x="450" y="192" text-anchor="middle" style="fill:var(--muted)">edit(master+ref1)</text></g>
+              <g class="kf"><rect x="390" y="220" width="120" height="56" rx="8" style="fill:var(--panel);stroke:var(--broll)"/><text x="450" y="244" text-anchor="middle" style="fill:var(--ink)" font-weight="600">s04 b-roll</text><text x="450" y="262" text-anchor="middle" style="fill:var(--muted)">edit(master)</text></g>
+              <path d="M330 140 C 360 120, 360 40, 390 38" style="stroke:var(--muted);fill:none" marker-end="url(#ah2)"/>
+              <path d="M330 145 C 360 140, 360 108, 390 108" style="stroke:var(--muted);fill:none" marker-end="url(#ah2)"/>
+              <path d="M330 155 C 360 160, 360 178, 390 178" style="stroke:var(--muted);fill:none" marker-end="url(#ah2)"/>
+              <path d="M330 165 C 360 180, 360 248, 390 248" style="stroke:var(--muted);fill:none" marker-end="url(#ah2)"/>
+            </g>
+          </svg>
+        </div>
+        <div>
+          <p>Generating every shot from text alone gives everyone a slightly different face in every shot. Instead, per <b>setting</b>:</p>
+          <ol style="color:var(--ink-2)">
+            <li>Generate one wide <b>master</b> frame containing everyone, conditioned on a stitched sheet of their face references. FLUX Kontext edits from reference images.</li>
+            <li>Make every other shot in that setting an <b>edit of the master</b> (“close-up of the woman on the left…”), conditioned on the master plus that character's face reference. The room, lighting and wardrobe carry over.</li>
+            <li>Start <code>extend</code> shots from the source clip's <b>actual last frame</b>, so the cut is seamless.</li>
+          </ol>
+          <p>Each candidate is then checked: InsightFace finds the faces, and each expected character's best cosine similarity is averaged. A candidate below <code>image.identity_threshold</code> is regenerated with a new seed, up to 3 attempts, and the best one is kept.</p>
+          <div class="card" style="padding:12px">
+            <div class="bars" id="qcBars"><div class="thr" style="bottom:69px"></div></div>
+            <div class="controls" style="margin-top:6px"><button class="btn" id="qcReplay">↻ Replay QC</button><span class="muted" id="qcInfo" style="font-size:13px"></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- chaining -->
+    <div class="reveal" style="margin-top:40px">
+      <h3>④ Shots longer than the model can make: chaining</h3>
+      <div class="grid-2" style="align-items:center">
+        <div>
+          <p>Image-to-video models produce about 5 s per run (Wan needs <code>4n+1</code> frames, e.g. 121 frames at 24 fps). For longer b-roll, <code>VideoGen.motion()</code> splits the shot into equal segments. Each segment <b>starts from the previous segment's last frame</b>, and the segments are concatenated.</p>
+          <p>Talking shots are handled differently. InfiniteTalk runs in <i>streaming</i> mode with overlapping motion frames, so a long dialogue becomes one continuous lip-synced take.</p>
+        </div>
+        <div class="card"><svg viewBox="0 0 520 170" style="width:100%" id="chainSvg"></svg>
+          <div class="controls"><button class="btn" id="chainReplay">↻ Replay</button></div></div>
+      </div>
+    </div>
+
+    <!-- color -->
+    <div class="reveal" style="margin-top:40px">
+      <h3>⑤ Making new shots look like the source: LUT color matching</h3>
+      <div class="grid-2" style="align-items:center">
+        <div>
+          <p>Generated shots usually look cleaner and flatter than real concert footage. In the edit stage, Encore measures the mean and standard deviation of each shot in <b>CIE Lab</b> space and compares them with the source clip's last scenes. It then applies a <b>Reinhard transfer</b>:</p>
+          <pre><code>lab' = (lab − μ_shot) · clamp(σ_src/σ_shot, 0.5, 2) + μ_src
+out  = lab + (lab' − lab) · strength      <span class="c"># strength 0.7</span></code></pre>
+          <p>Instead of processing frames in Python, the transform is baked into a 33³ <b>3D LUT</b> (<code>.cube</code>) and applied by ffmpeg's <code>lut3d</code> filter, which is fast. Drag the slider to try it on a palette, using the same math in JavaScript.</p>
+        </div>
+        <div class="card">
+          <div class="muted" style="font-size:12px;margin-bottom:6px">source look (target)</div>
+          <div class="swatches" id="swSrc"></div>
+          <div class="muted" style="font-size:12px;margin:12px 0 6px">generated shot → graded</div>
+          <div class="swatches" id="swGen"></div>
+          <div class="slider-row">strength <input type="range" id="lutStrength" min="0" max="1" step="0.01" value="0"><b id="lutVal">0.00</b></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- edit -->
+    <div class="reveal" style="margin-top:40px">
+      <h3>⑥ Putting it together: the final edit</h3>
+      <p>Every part is conformed to one format (default 1280×720 at 25 fps, H.264/AAC). If a generated video is shorter than its dialogue, the last frame is held (<code>tpad</code>) so lines are never cut off. The final ffmpeg pass:</p>
+      <div class="card">
+        <div id="editTracks"></div>
+      </div>
+      <p class="muted" style="font-size:14px">Optional music bed: the source's instrumental stem is looped under the new footage at −18 dB and ducked with <code>sidechaincompress</code> whenever someone speaks. Then <code>loudnorm</code> brings it to −16 LUFS. A watermark is overlaid and <code>comment=AI-generated…</code> is written to the MP4 metadata.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ========================================================== REVIEW LOOP -->
+<section id="loop">
+  <div class="wrap">
+    <div class="eyebrow">06 · Review loop</div>
+    <h2>Spend GPU minutes only on approved work</h2>
+    <p class="lead">Video generation can take minutes per shot, so the workflow stops where your judgment is cheap.</p>
+    <div class="card reveal" style="margin-top:22px">
+      <svg viewBox="0 0 1000 170" style="width:100%" id="loopSvg">
+        <g font-family="var(--sans)" font-size="13">
+          <g class="lp"><rect x="10" y="50" width="150" height="56" rx="10" style="fill:var(--bg-2);stroke:var(--line)"/><text x="85" y="75" text-anchor="middle" style="fill:var(--ink)" font-weight="700">analyze → script</text><text x="85" y="94" text-anchor="middle" style="fill:var(--muted)" font-size="11">~minutes · Mac</text></g>
+          <g class="lp"><rect x="200" y="40" width="170" height="76" rx="10" style="fill:var(--accent-soft);stroke:var(--accent)"/><text x="285" y="66" text-anchor="middle" style="fill:var(--ink)" font-weight="700">✋ Checkpoint 1</text><text x="285" y="85" text-anchor="middle" style="fill:var(--muted)" font-size="11">names · voices · lines</text><text x="285" y="101" text-anchor="middle" style="fill:var(--muted)" font-size="11">"revise with AI"</text></g>
+          <g class="lp"><rect x="410" y="50" width="150" height="56" rx="10" style="fill:var(--bg-2);stroke:var(--line)"/><text x="485" y="75" text-anchor="middle" style="fill:var(--ink)" font-weight="700">voices + keyframes</text><text x="485" y="94" text-anchor="middle" style="fill:var(--muted)" font-size="11">~seconds per still</text></g>
+          <g class="lp"><rect x="600" y="40" width="170" height="76" rx="10" style="fill:var(--accent-soft);stroke:var(--accent)"/><text x="685" y="66" text-anchor="middle" style="fill:var(--ink)" font-weight="700">✋ Checkpoint 2</text><text x="685" y="85" text-anchor="middle" style="fill:var(--muted)" font-size="11">regenerate bad stills</text><text x="685" y="101" text-anchor="middle" style="fill:var(--muted)" font-size="11">fix prompts / LoRA</text></g>
+          <g class="lp"><rect x="810" y="50" width="180" height="56" rx="10" style="fill:var(--bg-2);stroke:var(--line)"/><text x="900" y="75" text-anchor="middle" style="fill:var(--ink)" font-weight="700">shoot → edit</text><text x="900" y="94" text-anchor="middle" style="fill:var(--muted)" font-size="11">~minutes per shot · Spark</text></g>
+          <path d="M160 78 H200 M370 78 H410 M560 78 H600 M770 78 H810" style="stroke:var(--muted);stroke-width:2"/>
+          <path d="M685 116 C 685 160, 485 160, 485 106" style="stroke:var(--accent);fill:none;stroke-dasharray:5 5" class="flowp"/>
+          <text x="585" y="160" text-anchor="middle" style="fill:var(--accent)" font-size="11">iterate on single shots</text>
+          <path d="M285 40 C 285 0, 85 0, 85 50" style="stroke:var(--accent);fill:none;stroke-dasharray:5 5" class="flowp"/>
+          <text x="185" y="14" text-anchor="middle" style="fill:var(--accent)" font-size="11">re-run script</text>
+        </g>
+      </svg>
+    </div>
+    <div class="card reveal" style="margin-top:18px">
+      <h4 style="margin-top:0">What each regenerate button runs, for that shot only</h4>
+      <table>
+        <tr><th>Action</th><th>Stages</th><th>Why</th></tr>
+        <tr><td>Re-voice</td><td><code>voices → shoot → edit</code></td><td>New audio changes the lip sync, but not the keyframe.</td></tr>
+        <tr><td>New keyframe</td><td><code>keyframes</code></td><td>Stop and review again before spending video minutes.</td></tr>
+        <tr><td>Re-shoot</td><td><code>shoot → edit</code></td><td>Same still and audio, new seed or motion.</td></tr>
+        <tr><td>Click a stage chip</td><td>that stage → end, forced</td><td>For example, after renaming characters, re-run the script.</td></tr>
+        <tr><td>CLI</td><td><code>encore run p --stages keyframes,shoot --shots s03</code></td><td>Any combination you like.</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- =========================================================== PROTOCOLS -->
+<section id="protocols">
+  <div class="wrap">
+    <div class="eyebrow">07 · Protocols</div>
+    <h2>How the Mac talks to the Spark</h2>
+    <div class="grid-2" style="margin-top:22px">
+      <div class="card seq reveal" id="seqCard">
+        <h4 style="margin-top:0">Worker job (TTS / talking / i2v)</h4>
+        <svg viewBox="0 0 480 330">
+          <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" style="fill:var(--ink-2)"/></marker></defs>
+          <g font-size="13" font-weight="700"><text x="70" y="22" text-anchor="middle">Mac (client)</text><text x="250" y="22" text-anchor="middle">worker</text><text x="410" y="22" text-anchor="middle">engine (GPU)</text></g>
+          <line class="life" x1="70" y1="32" x2="70" y2="320"/><line class="life" x1="250" y1="32" x2="250" y2="320"/><line class="life" x1="410" y1="32" x2="410" y2="320"/>
+          <path class="msg" d="M70 60 H246" style="animation-delay:.1s"/><text class="msg-l" x="80" y="54" style="animation-delay:.1s">POST /jobs/talking  (multipart)</text>
+          <path class="msg" d="M250 86 H74" style="animation-delay:.6s"/><text class="msg-l" x="130" y="80" style="animation-delay:.6s">{"id": "a1f…"}</text>
+          <path class="msg" d="M250 116 H406" style="animation-delay:1.1s"/><text class="msg-l" x="262" y="110" style="animation-delay:1.1s">unload others · load · run</text>
+          <path class="msg" d="M70 150 H246" style="animation-delay:1.6s"/><text class="msg-l" x="80" y="144" style="animation-delay:1.6s">GET /jobs/a1f…  (poll 2 s)</text>
+          <path class="msg" d="M250 176 H74" style="animation-delay:2.1s"/><text class="msg-l" x="120" y="170" style="animation-delay:2.1s">{"status": "running"}</text>
+          <path class="msg" d="M410 210 H254" style="animation-delay:2.6s"/><text class="msg-l" x="290" y="204" style="animation-delay:2.6s">out.mp4</text>
+          <path class="msg" d="M70 244 H246" style="animation-delay:3.1s"/><text class="msg-l" x="80" y="238" style="animation-delay:3.1s">GET /jobs/a1f…</text>
+          <path class="msg" d="M250 270 H74" style="animation-delay:3.6s"/><text class="msg-l" x="120" y="264" style="animation-delay:3.6s">{"status": "done"}</text>
+          <path class="msg" d="M70 300 H246" style="animation-delay:4.1s"/><text class="msg-l" x="80" y="294" style="animation-delay:4.1s">GET /jobs/a1f…/result → file</text>
+        </svg>
+        <div class="controls"><button class="btn" id="seqReplay">↻ Replay</button></div>
+      </div>
+      <div class="reveal">
+        <h4>Multipart fields</h4>
+        <table>
+          <tr><th>Task</th><th>Files</th><th>Params (JSON)</th></tr>
+          <tr><td><code>tts</code></td><td><code>ref_audio</code>?</td><td>text, language, ref_text, emotion, voice_index</td></tr>
+          <tr><td><code>talking</code></td><td><code>image</code>, <code>audio</code>, <code>audio_1..n</code></td><td>prompt, fps, seconds, width, height, num_speakers, bboxes</td></tr>
+          <tr><td><code>i2v</code></td><td><code>image</code></td><td>prompt, negative, frames, fps, width, height</td></tr>
+        </table>
+        <p style="font-size:14px">For multi-speaker shots, the shoot stage detects faces in the keyframe, matches each to a character by embedding, orders the audio tracks left to right, and sends the matching <code>bboxes</code>, so <code>person1</code> really is the left face.</p>
+        <h4>ComfyUI templates</h4>
+        <p style="font-size:14px">Export any graph with <i>Export (API)</i> and type placeholders into its inputs. Before a job, <code>ComfyClient</code> uploads the files and substitutes the values. It then polls <code>/history</code> and downloads the outputs from <code>/view</code>.</p>
+<pre><code><span class="c">// workflows/i2v_wan22_ti2v5b.json (excerpt)</span>
+<span class="k">"8"</span>: { <span class="k">"class_type"</span>: <span class="s">"Wan22ImageToVideoLatent"</span>,
+  <span class="k">"inputs"</span>: { <span class="k">"width"</span>: <span class="s">"{{WIDTH}}"</span>, <span class="k">"length"</span>: <span class="s">"{{FRAMES}}"</span>,
+              <span class="k">"start_image"</span>: [<span class="s">"7"</span>, <span class="n">0</span>] } }
+<span class="c">// "{{FRAMES}}" alone → the number 121, not a string</span></code></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================= TESTING -->
+<section id="testing">
+  <div class="wrap">
+    <div class="eyebrow">08 · Testing guide</div>
+    <h2>Test it layer by layer</h2>
+    <p class="lead">Start with zero dependencies and add one real component at a time. If something breaks, you'll know which layer caused it. Levels 0–3 run on any Mac with ffmpeg. Levels 4–6 need the Spark and the Studio.</p>
+
+    <div class="card reveal" style="margin-top:22px">
+      <div class="tabs" id="testTabs">
+        <button class="tab active" data-tab="t0">0 · Unit tests</button>
+        <button class="tab" data-tab="t1">1 · Dry run</button>
+        <button class="tab" data-tab="t2">2 · Web UI</button>
+        <button class="tab" data-tab="t3">3 · Worker (local)</button>
+        <button class="tab" data-tab="t4">4 · Spark bring-up</button>
+        <button class="tab" data-tab="t5">5 · Mac bring-up</button>
+        <button class="tab" data-tab="t6">6 · Real run</button>
+        <button class="tab" data-tab="t7">Troubleshooting</button>
+      </div>
+
+      <div class="tabpanel active" id="t0">
+        <p>11 tests covering JSON extraction, script repair, the LLM client's schema fallback and retry, ComfyUI templating with a fake ComfyUI over HTTP, face clustering, LUT math, a full dry-run pipeline, single-shot regeneration, and a live worker round-trip.</p>
+        <div class="term-title">terminal</div>
+<pre><code>brew install ffmpeg uv
+git clone https://github.com/tianhaoz95/encore && cd encore
+uv venv --python 3.12 .venv && uv pip install -e <span class="s">".[dev]"</span>
+.venv/bin/python -m pytest -q          <span class="c"># expect: 11 passed</span></code></pre>
+        <p class="muted" style="font-size:14px">The fixture builds an 8 s test clip from scikit-image's public-domain astronaut photo plus macOS <code>say</code> audio. Install <code>scikit-image</code> to get a real face; without it the clip has no faces but the tests still pass.</p>
+      </div>
+
+      <div class="tabpanel" id="t1">
+        <p>The whole pipeline with stand-ins for every model: a template script, macOS voices, composited stills and slow zoom moves. The result is a correctly timed preview cut, which shows that analysis, timing, editing and subtitles all work.</p>
+        <ol class="steps">
+          <li><h4>Make a test clip (or use any short clip with faces)</h4>
+<pre><code>uv pip install scikit-image
+.venv/bin/python tests/make_fixture.py /tmp/clip.mp4</code></pre></li>
+          <li><h4>Create a project</h4>
+<pre><code>.venv/bin/encore new /tmp/clip.mp4 <span class="s">"a podcast where she talks about the concert"</span> \
+    --name demo --names <span class="s">"Mina"</span> --seconds 30 -c configs/dryrun.yaml</code></pre></li>
+          <li><h4>Run everything</h4>
+<pre><code>.venv/bin/encore run demo -c configs/dryrun.yaml
+.venv/bin/encore status demo -c configs/dryrun.yaml</code></pre>
+            <p>Expect all 7 stages to show <code>done</code>, one character with face references and <code>voice=yes</code> (if mlx-whisper is installed), and three shots.</p></li>
+          <li><h4>Inspect the artifacts</h4>
+<pre><code>open projects/demo/output/final.mp4         <span class="c"># source clip + new shots, watermark</span>
+cat  projects/demo/output/final.srt
+open projects/demo/cast/char_0/             <span class="c"># face crops + voice_ref.wav</span>
+open projects/demo/keyframes/
+cat  projects/demo/log.txt</code></pre></li>
+          <li><h4>Test single-shot regeneration</h4>
+<pre><code><span class="c"># edit a line in projects/demo/script.json, then:</span>
+.venv/bin/encore run demo -c configs/dryrun.yaml --stages voices,shoot,edit --shots s02</code></pre>
+            <p>Only <code>s02</code>'s audio and video should get new timestamps, and the subtitles should show the new line.</p></li>
+        </ol>
+      </div>
+
+      <div class="tabpanel" id="t2">
+        <ol class="steps">
+          <li><h4>Start the UI with the dry-run config</h4>
+<pre><code>.venv/bin/encore serve -c configs/dryrun.yaml      <span class="c"># http://127.0.0.1:8700</span></code></pre></li>
+          <li><h4>Create a project from the sidebar</h4><p>Upload a clip and enter a prompt. It automatically runs <i>analyze → script</i>. Watch the stage chips pulse and the log fill in.</p></li>
+          <li><h4>Checkpoint 1</h4><p>Rename the character, edit a line (<code>speaker: text</code> per row), and click <b>Save script</b> and <b>Save cast</b>. Optionally upload a voice sample.</p></li>
+          <li><h4>Voices + keyframes, then Checkpoint 2</h4><p>Each shot card shows its still and an audio player. Click <b>New keyframe</b> on one shot.</p></li>
+          <li><h4>Shoot + edit</h4><p>The final video appears at the top, with download links for the MP4 and SRT.</p></li>
+        </ol>
+        <div class="callout">The API can also be scripted: <code>GET /api/projects/&lt;name&gt;</code> returns the full state, and <code>POST /api/projects/&lt;name&gt;/run</code> takes <code>{"stages": [...], "shots": [...], "force": true}</code>. Jobs run one at a time on a background thread.</div>
+      </div>
+
+      <div class="tabpanel" id="t3">
+        <p>Check the Mac ↔ worker protocol without a GPU by using the built-in <code>say</code> and <code>kenburns</code> engines.</p>
+        <div class="term-title">worker-test.yaml</div>
+<pre><code><span class="k">work_dir</span>: /tmp/encore-worker
+<span class="k">engines</span>:
+  <span class="k">say</span>:              {<span class="k">type</span>: say}
+  <span class="k">kenburns</span>:         {<span class="k">type</span>: kenburns, <span class="k">task</span>: i2v}
+  <span class="k">kenburns_talking</span>: {<span class="k">type</span>: kenburns, <span class="k">task</span>: talking}</code></pre>
+        <div class="term-title">terminal 1</div>
+<pre><code>.venv/bin/encore-worker --config worker-test.yaml --host 127.0.0.1 --port 8101</code></pre>
+        <div class="term-title">terminal 2: raw protocol</div>
+<pre><code>curl -s localhost:8101/health
+ID=$(curl -s -F engine=say -F <span class="s">'params={"text":"hello from the worker"}'</span> \
+     localhost:8101/jobs/tts | python3 -c <span class="s">'import json,sys;print(json.load(sys.stdin)["id"])'</span>)
+curl -s localhost:8101/jobs/$ID
+curl -s -o hello.aiff localhost:8101/jobs/$ID/result && afplay hello.aiff</code></pre>
+        <div class="term-title">terminal 2: pipeline through the worker</div>
+<pre><code>.venv/bin/encore run demo -c configs/dryrun.yaml --stages voices,shoot,edit \
+  -s tts.backend=worker -s tts.url=http://127.0.0.1:8101 -s tts.engine=say \
+  -s video.talking_backend=worker -s video.broll_backend=worker \
+  -s video.worker_url=http://127.0.0.1:8101 \
+  -s video.talking_engine=kenburns_talking -s video.broll_engine=kenburns</code></pre>
+        <p>The log should show <code>shoot: s01 talking via worker</code>, and the worker log should show <code>POST /jobs/…</code> lines.</p>
+      </div>
+
+      <div class="tabpanel" id="t4">
+        <div class="callout warn">These parts were written against each project's published interface but <b>haven't been run yet</b>. Bring them up one at a time and test each in isolation before the full pipeline.</div>
+        <ol class="steps">
+          <li><h4>Install</h4>
+<pre><code>git clone https://github.com/tianhaoz95/encore && cd encore
+less scripts/setup_spark.sh         <span class="c"># review: ~150 GB of weights into ~/encore-opt</span>
+scripts/setup_spark.sh</code></pre>
+            <p>If a PyTorch wheel for aarch64 + CUDA is missing, run the same steps inside NVIDIA's PyTorch container (<code>nvcr.io/nvidia/pytorch</code>).</p></li>
+          <li><h4>ComfyUI on its own</h4><p>Start it with <code>scripts/start_spark.sh</code>, open <code>http://spark.local:8188</code>, and drag in <code>workflows/keyframe_flux_kontext.json</code>. If a node shows red, your ComfyUI version renamed an input. Fix it in the UI and re-export with <i>Export (API)</i>, keeping the <code>{{placeholders}}</code>.</p></li>
+          <li><h4>Worker engines one by one</h4>
+<pre><code><span class="c"># TTS: Korean with a cloned voice</span>
+curl -s -F engine=chatterbox -F ref_audio=@voice.wav \
+  -F <span class="s">'params={"text":"오늘 정말 행복했어요","language":"ko"}'</span> spark.local:8100/jobs/tts
+<span class="c"># talking head</span>
+curl -s -F engine=infinitetalk -F image=@face.png -F audio=@line.wav \
+  -F <span class="s">'params={"prompt":"a woman talking","num_speakers":1}'</span> spark.local:8100/jobs/talking
+<span class="c"># poll /jobs/&lt;id&gt; and download /jobs/&lt;id&gt;/result as in level 3</span></code></pre>
+            <p>If InfiniteTalk's flags changed, edit the <code>infinitetalk</code> block in <code>worker.yaml</code>; the argv is built in <code>encore/workers/engines.py</code>. Failures return the last 3,000 characters of stderr in <code>/jobs/&lt;id&gt;</code>.</p></li>
+          <li><h4>Watch memory</h4><p>With <code>nvidia-smi</code> running, submit a TTS job and then a talking job. The worker should unload Chatterbox before InfiniteTalk loads.</p></li>
+        </ol>
+      </div>
+
+      <div class="tabpanel" id="t5">
+        <ol class="steps">
+          <li><h4>Install</h4>
+<pre><code>LLM_MODEL=qwen3:32b VLM_MODEL=qwen2.5vl:72b scripts/setup_mac.sh
+<span class="c"># edit config.yaml: replace spark.local with the Spark's hostname or IP</span></code></pre></li>
+          <li><h4>Doctor</h4>
+<pre><code>.venv/bin/encore doctor</code></pre>
+            <p>Every line should say <b>ok</b>: ffmpeg, LLM, VLM, mlx-whisper, demucs, insightface, worker and ComfyUI.</p></li>
+          <li><h4>Understanding only (no Spark needed)</h4>
+<pre><code>.venv/bin/encore new concert.mp4 <span class="s">"a backstage interview"</span> --name t1
+.venv/bin/encore run t1 --until script
+.venv/bin/encore status t1</code></pre>
+            <p>Check that <code>analysis/audio/vocals.wav</code> really is vocals only, that the face groups match the real people (look in <code>cast/char_*</code>), and that the script reads naturally. If one person is split into two groups, raise <code>faces.cluster_threshold</code>. If two people are merged, lower it.</p></li>
+        </ol>
+      </div>
+
+      <div class="tabpanel" id="t6">
+        <ol class="steps">
+          <li><h4>Short first</h4><p>Use <code>--seconds 20</code> to get 3–5 shots, so a full loop takes minutes.</p></li>
+          <li><h4>Keyframes first</h4>
+<pre><code>.venv/bin/encore run t1 --from voices --until keyframes
+open projects/t1/keyframes/ && grep identity projects/t1/log.txt</code></pre>
+            <p>The QC scores in the log should mostly be above 0.35. If they aren't, run <code>encore lora-dataset t1 char_0</code>, train an identity LoRA, and set <code>lora</code> on the character.</p></li>
+          <li><h4>One shot of each kind</h4>
+<pre><code>.venv/bin/encore run t1 --stages shoot --shots s01      <span class="c"># check lip sync</span>
+.venv/bin/encore run t1 --stages shoot --shots s04      <span class="c"># check b-roll</span></code></pre></li>
+          <li><h4>Everything</h4>
+<pre><code>.venv/bin/encore run t1 --from shoot && open projects/t1/output/final.mp4</code></pre></li>
+        </ol>
+      </div>
+
+      <div class="tabpanel" id="t7">
+        <table>
+          <tr><th>Symptom</th><th>Where to look / fix</th></tr>
+          <tr><td>Stage shows <code>failed</code></td><td><code>projects/&lt;p&gt;/log.txt</code> has the full traceback. <code>encore status</code> shows the error.</td></tr>
+          <tr><td><code>LLM request … failed</code></td><td>Is Ollama running? <code>curl localhost:11434/v1/models</code>. Do <code>llm.model</code> and the pulled tag match?</td></tr>
+          <tr><td><code>model never produced valid ShotList</code></td><td>Use a larger model, or lower <code>llm.temperature</code>. The validation errors are in the log.</td></tr>
+          <tr><td>ComfyUI <code>rejected workflow</code></td><td>The node or input name differs in your ComfyUI version. Open the JSON in the UI, fix it, and re-export the API format.</td></tr>
+          <tr><td><code>no value for placeholders [...]</code></td><td>The workflow uses a placeholder that this stage doesn't provide. See the list in <code>backends/comfy.py</code>.</td></tr>
+          <tr><td>Worker job <code>failed</code></td><td><code>curl spark:8100/jobs/&lt;id&gt;</code> returns the engine's stderr tail.</td></tr>
+          <tr><td>Wrong person's mouth moves</td><td>Check that <code>cast/&lt;id&gt;/embedding.npy</code> exists. Speaker layout falls back to the original order when faces can't be matched.</td></tr>
+          <tr><td>New shots look washed out next to the source</td><td>Raise <code>strength</code> in <code>core/color.py</code>, or set <code>edit.grain</code>.</td></tr>
+          <tr><td>Voices in the wrong language</td><td>Pass <code>--language</code>. It overrides the language Whisper detected.</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ REFERENCE -->
+<section id="reference">
+  <div class="wrap">
+    <div class="eyebrow">09 · Reference</div>
+    <h2>Code map, config and status</h2>
+    <div class="grid-2" style="margin-top:22px">
+      <div class="card reveal">
+        <h4 style="margin-top:0">Code map</h4>
+        <table>
+          <tr><td><code>encore/core/</code></td><td>config, schemas, project store, ffmpeg helpers, LLM client, color LUTs</td></tr>
+          <tr><td><code>encore/analyze/</code></td><td>scenes, audio (Demucs · Whisper · pyannote), faces, VLM</td></tr>
+          <tr><td><code>encore/write/</code></td><td>script writer, normalizer, template fallback</td></tr>
+          <tr><td><code>encore/backends/</code></td><td>TTS, image, video, ComfyUI client, worker client</td></tr>
+          <tr><td><code>encore/stages/</code></td><td>the seven stages</td></tr>
+          <tr><td><code>encore/pipeline.py</code></td><td>stage order, status, per-shot regeneration</td></tr>
+          <tr><td><code>encore/server/</code></td><td>FastAPI app + single-page studio UI</td></tr>
+          <tr><td><code>encore/workers/</code></td><td>GPU job server + engines</td></tr>
+          <tr><td><code>workflows/</code></td><td>ComfyUI API templates</td></tr>
+          <tr><td><code>configs/dryrun.yaml</code></td><td>no-GPU config</td></tr>
+          <tr><td><code>scripts/</code></td><td>setup and start scripts for each machine</td></tr>
+        </table>
+      </div>
+      <div class="card reveal">
+        <h4 style="margin-top:0">Key config knobs</h4>
+        <table>
+          <tr><td><code>llm.model</code></td><td>script quality: bigger is better</td></tr>
+          <tr><td><code>faces.cluster_threshold</code></td><td>splits vs merges people</td></tr>
+          <tr><td><code>tts.engine</code></td><td>chatterbox (Korean) · f5 · cosyvoice</td></tr>
+          <tr><td><code>image.identity_threshold</code></td><td>QC strictness</td></tr>
+          <tr><td><code>image.max_attempts</code></td><td>QC retries</td></tr>
+          <tr><td><code>video.talking_backend</code></td><td>worker · comfyui · kenburns</td></tr>
+          <tr><td><code>video.max_clip_seconds</code></td><td>chain segment length</td></tr>
+          <tr><td><code>edit.prepend_source</code></td><td>start the output with the original clip</td></tr>
+          <tr><td><code>edit.music_bed</code></td><td>ducked instrumental under dialogue</td></tr>
+          <tr><td><code>edit.subtitles</code></td><td>none · sidecar · burn</td></tr>
+          <tr><td><code>edit.watermark</code></td><td>keep it on for anything shared</td></tr>
+        </table>
+      </div>
+    </div>
+    <div class="grid-2" style="margin-top:18px">
+      <div class="card reveal">
+        <h4 style="margin-top:0">Verified (on a 16 GB M2 with ffmpeg only)</h4>
+        <ul class="check">
+          <li>Full pipeline with stand-in models, including OpenCV face grouping and mlx-whisper → voice sample</li>
+          <li>Web API: script edits, single-shot regeneration, path-traversal guard</li>
+          <li>Worker HTTP protocol with test engines</li>
+          <li>ComfyUI client against a fake ComfyUI server (upload → prompt → history → view)</li>
+          <li>11 pytest tests passing</li>
+        </ul>
+      </div>
+      <div class="card reveal">
+        <h4 style="margin-top:0">Written, but not run yet (needs CUDA or large weights)</h4>
+        <ul class="check todo">
+          <li>Chatterbox / F5 engines, InfiniteTalk engine</li>
+          <li>The three ComfyUI workflows (node names follow current core ComfyUI)</li>
+          <li>Demucs, pyannote, InsightFace</li>
+          <li>Real LLM/VLM structured output</li>
+          <li>The setup scripts</li>
+        </ul>
+      </div>
+    </div>
+    <div class="callout warn reveal"><b>Responsible use.</b> Encore clones real people's faces and voices. Keep the output private unless you have the rights to share it. The watermark and the MP4 metadata note are on by default, and the script prompt tells the LLM to stay respectful.</div>
+  </div>
+</section>
+
+<footer><div class="wrap">Encore · on-device clip extension · this walkthrough lives in <code>reports/project-walkthrough/site</code>; serve it with <code>reports/project-walkthrough/script/serve.sh</code></div></footer>
+
+<script src="assets/app.js"></script>
+</body>
+</html>

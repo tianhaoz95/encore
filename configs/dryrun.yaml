@@ -1,0 +1,27 @@
+# Zero-GPU, zero-server configuration: exercises the whole pipeline on any Mac
+# (or Linux box with ffmpeg) using fallbacks. Output is a slideshow-style
+# animatic with real cut structure, timing, voices (macOS `say`) and subtitles.
+#   encore run myproj -c configs/dryrun.yaml
+projects_dir: projects
+llm:
+  backend: template        # set to openai + a local model for real scripts
+vlm:
+  backend: none
+asr:
+  backend: auto            # uses mlx-whisper if installed, else skipped
+separation:
+  backend: none
+diarization:
+  backend: none
+faces:
+  backend: opencv
+tts:
+  backend: say
+image:
+  backend: still
+video:
+  talking_backend: kenburns
+  broll_backend: kenburns
+edit:
+  grain: 0
+  music_bed: false
